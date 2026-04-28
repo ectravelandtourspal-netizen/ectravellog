@@ -1,0 +1,17 @@
+# Dependency directories
+node_modules/
+
+# Environment secrets
+.env
+
+# Backend (not needed for GitHub Pages)
+server/
+package.json
+package-lock.json
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Uploaded temp files
+uploads/
