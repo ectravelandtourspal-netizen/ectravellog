@@ -74,13 +74,66 @@ document.getElementById('timeInBtn').addEventListener('click', () => {
   const mm = String(today.getMonth() + 1).padStart(2, '0');
   const dd = String(today.getDate()).padStart(2, '0');
   document.getElementById('tiDate').value = `${yy}-${mm}-${dd}`;
+
+  // auto-fill location via geolocation
+  const locInput = document.getElementById('tiLocation');
+  locInput.value = '';
+  locInput.placeholder = '📍 Getting location…';
+  locInput.readOnly = true;
+
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      async pos => {
+        try {
+          const { latitude: lat, longitude: lon } = pos.coords;
+          const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`;
+          const res = await fetch(url, { headers: { 'Accept-Language': 'en' } });
+          const geo = await res.json();
+          const addr = geo.address || {};
+          // Build a short readable location string
+          const parts = [
+            addr.village || addr.town || addr.city || addr.municipality || addr.county || '',
+            addr.state || '',
+            addr.country || '',
+          ].filter(Boolean);
+          locInput.value = parts.join(', ') || geo.display_name || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+        } catch {
+          locInput.value = `${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)}`;
+        }
+        locInput.readOnly = false;
+        locInput.placeholder = 'Location';
+      },
+      () => {
+        // permission denied or unavailable — let user type manually
+        locInput.readOnly = false;
+        locInput.value = '';
+        locInput.placeholder = 'e.g. Main Office';
+      },
+      { timeout: 8000 }
+    );
+  } else {
+    locInput.readOnly = false;
+    locInput.placeholder = 'e.g. Main Office';
+  }
+
   hideFeedback(timeInFeedback);
   openModal(timeInModalOverlay);
 });
 
-document.getElementById('closeTimeInModal').addEventListener('click', () => closeModal(timeInModalOverlay));
-document.getElementById('cancelTimeInBtn').addEventListener('click', () => closeModal(timeInModalOverlay));
-timeInModalOverlay.addEventListener('click', e => { if (e.target === timeInModalOverlay) closeModal(timeInModalOverlay); });
+document.getElementById('closeTimeInModal').addEventListener('click', () => {
+  document.getElementById('tiLocation').readOnly = false;
+  closeModal(timeInModalOverlay);
+});
+document.getElementById('cancelTimeInBtn').addEventListener('click', () => {
+  document.getElementById('tiLocation').readOnly = false;
+  closeModal(timeInModalOverlay);
+});
+timeInModalOverlay.addEventListener('click', e => {
+  if (e.target === timeInModalOverlay) {
+    document.getElementById('tiLocation').readOnly = false;
+    closeModal(timeInModalOverlay);
+  }
+});
 
 timeInForm.addEventListener('submit', async e => {
   e.preventDefault();
