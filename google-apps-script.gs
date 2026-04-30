@@ -62,6 +62,7 @@ function doPost(e) {
     if (params.action === 'adminLogin')      return adminLogin(params);
     if (params.action === 'addCashAdvance')  return addCashAdvance(params);
     if (params.action === 'officeTimeIn')    return officeTimeIn(params);
+    if (params.action === 'markOfficePaid')  return markOfficePaid(params);
     return jsonResponse({ success: false, message: 'Unknown action' });
   } catch (err) {
     return jsonResponse({ success: false, message: err.message });
@@ -82,6 +83,7 @@ function doGet(e) {
       if (params.action === 'adminLogin')     return adminLogin(params);
       if (params.action === 'addCashAdvance') return addCashAdvance(params);
       if (params.action === 'officeTimeIn')   return officeTimeIn(params);
+      if (params.action === 'markOfficePaid')  return markOfficePaid(params);
     }
     var action = e.parameter.action;
     if (action === 'getTrips')              return getTrips();
@@ -91,6 +93,7 @@ function doGet(e) {
     if (action === 'getCashAdvances')       return getCashAdvances(e.parameter.name);
     if (action === 'getStaffNames')         return getStaffNames();
     if (action === 'getOfficeAttendance')   return getOfficeAttendance(e.parameter.date);
+    if (action === 'getOfficeSalaryReport') return getOfficeSalaryReport(e.parameter);
     return jsonResponse({ success: false, message: 'Unknown action' });
   } catch (err) {
     return jsonResponse({ success: false, message: err.message });
@@ -626,8 +629,152 @@ function getOfficeAttendance(date) {
   return jsonResponse({ success: true, records: records });
 }
 
-// ══════════════════════════════════════════════════════════
-// backfillPayments — RUN THIS ONCE from the GAS editor
+// ══════════════════════════════════════════════════════════// getOfficeRates — reads "office_rates" sheet (A=Name, B=Daily Rate)
+// Create this sheet manually: Name in col A, daily rate in col B, row 1 = headers
+// ════════════════════════════════════════════════════════
+function getOfficeRates() {
+  var ss    = SpreadsheetApp.openById(SHEET_ID);
+  var sheet = ss.getSheetByName('office_rates');
+  var map   = {};
+  if (sheet && sheet.getLastRow() >= 2) {
+    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
+    data.forEach(function(row) {
+      var name = String(row[0]).trim().toLowerCase();
+      var rate = Number(row[1]) || 0;
+      if (name) map[name] = rate;
+    });
+  }
+  return map;
+}
+
+// ════════════════════════════════════════════════════════
+// getOfficeSalaryReport — counts days worked per staff in pay period,
+// looks up rates, fetches outstanding cash advances, returns full summary.
+// params: year, month (1-based), period (1 = 1st-15th, 2 = 16th-end)
+// ════════════════════════════════════════════════════════
+function getOfficeSalaryReport(params) {
+  var year     = Number(params.year);
+  var month    = Number(params.month);
+  var period   = Number(params.period);
+  var startDay = period === 1 ? 1 : 16;
+  var endDay   = period === 1 ? 15 : new Date(year, month, 0).getDate();
+
+  // Build lookup set of yyyy-MM-dd strings for the period
+  var dateSet = {};
+  for (var d = startDay; d <= endDay; d++) {
+    var key = year + '-' + String(month).padStart(2,'0') + '-' + String(d).padStart(2,'0');
+    dateSet[key] = true;
+  }
+
+  var ss    = SpreadsheetApp.openById(SHEET_ID);
+  var sheet = ss.getSheetByName('office staff');
+  var tz    = Session.getScriptTimeZone();
+  var staffMap = {};
+
+  if (sheet && sheet.getLastRow() >= 2) {
+    var attData = sheet.getRange(2, 1, sheet.getLastRow() - 1, 5).getValues();
+    attData.forEach(function(row) {
+      var rowDate = row[0] instanceof Date
+        ? Utilities.formatDate(row[0], tz, 'yyyy-MM-dd')
+        : String(row[0]).trim();
+      if (!dateSet[rowDate]) return;
+      var name     = String(row[1]).trim();
+      var position = String(row[2]).trim();
+      if (!name) return;
+      var nameKey = name.toLowerCase();
+      if (!staffMap[nameKey]) staffMap[nameKey] = { name: name, position: position, daysSet: {} };
+      staffMap[nameKey].daysSet[rowDate] = true; // distinct dates only
+    });
+  }
+
+  var rates    = getOfficeRates();
+  var advSheet = ss.getSheetByName('advances');
+  var allAdv   = [];
+  if (advSheet && advSheet.getLastRow() >= 2) {
+    var advData = advSheet.getRange(2, 1, advSheet.getLastRow() - 1, 6).getValues();
+    advData.forEach(function(row, idx) {
+      if (Number(row[4]) === 1) return; // already deducted
+      var aName = String(row[1]).trim();
+      if (!aName) return;
+      allAdv.push({
+        rowIndex: idx + 2,
+        name:     aName,
+        date:     row[0] instanceof Date ? Utilities.formatDate(row[0], tz, 'yyyy-MM-dd') : String(row[0]).trim(),
+        amount:   Number(row[2]) || 0,
+        notes:    String(row[3] || '').trim(),
+      });
+    });
+  }
+
+  var result = Object.keys(staffMap).map(function(nameKey) {
+    var s            = staffMap[nameKey];
+    var rate         = rates[nameKey] || 0;
+    var days         = Object.keys(s.daysSet).length;
+    var salary       = rate * days;
+    var staffAdv     = allAdv.filter(function(a) { return a.name.toLowerCase() === nameKey; });
+    var totalAdvances = staffAdv.reduce(function(sum, a) { return sum + a.amount; }, 0);
+    return {
+      name:          s.name,
+      position:      s.position,
+      days:          days,
+      ratePerDay:    rate,
+      salary:        salary,
+      advances:      staffAdv,
+      totalAdvances: totalAdvances,
+      net:           salary - totalAdvances,
+    };
+  });
+
+  result.sort(function(a, b) { return a.name.localeCompare(b.name); });
+  return jsonResponse({ success: true, staff: result });
+}
+
+// ════════════════════════════════════════════════════════
+// markOfficePaid — records payment in "office_payroll" sheet
+// and marks any deducted advances in "advances" sheet.
+// ════════════════════════════════════════════════════════
+function markOfficePaid(params) {
+  var ss    = SpreadsheetApp.openById(SHEET_ID);
+  var today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  var sheet = ss.getSheetByName('office_payroll');
+  if (!sheet) {
+    sheet = ss.insertSheet('office_payroll');
+    sheet.getRange(1, 1, 1, 10).setValues([[
+      'Date Paid','Name','Position','Period','Days','Rate/Day','Salary','Deductions','Net Paid','Notes'
+    ]]);
+    sheet.getRange(1, 1, 1, 10)
+      .setFontWeight('bold').setBackground('#1a73e8').setFontColor('#fff');
+    sheet.setFrozenRows(1);
+  }
+  sheet.appendRow([
+    today,
+    params.name      || '',
+    params.position  || '',
+    params.period    || '',
+    Number(params.days)       || 0,
+    Number(params.ratePerDay) || 0,
+    Number(params.salary)     || 0,
+    Number(params.deductions) || 0,
+    Number(params.net)        || 0,
+    params.notes || '',
+  ]);
+  SpreadsheetApp.flush();
+
+  var advSheet   = ss.getSheetByName('advances');
+  var advIndexes = params.advanceRowIndexes || [];
+  if (advSheet && advIndexes.length > 0) {
+    advIndexes.forEach(function(r) {
+      var rowNum = Number(r);
+      if (!rowNum || rowNum < 2) return;
+      advSheet.getRange(rowNum, 5).setValue(1);
+      advSheet.getRange(rowNum, 6).setValue(today);
+    });
+    SpreadsheetApp.flush();
+  }
+  return jsonResponse({ success: true, message: 'Office payment recorded' });
+}
+
+// ════════════════════════════════════════════════════════// backfillPayments — RUN THIS ONCE from the GAS editor
 // Creates payment records for all existing trips in
 // "trip details" that don't already have a payment entry.
 // ══════════════════════════════════════════════════════════

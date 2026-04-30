@@ -596,7 +596,7 @@ function resetForm() {
 // ══════════════════════════════════════════════════════════
 adminBtn.addEventListener('click', () => {
   if (isAdmin) {
-    showSalaryPanel();
+    showAdminHome();
     openModal(adminModalOverlay);
   } else {
     showLoginPanel();
@@ -632,7 +632,7 @@ adminForm.addEventListener('submit', async e => {
     adminBtn.textContent = '🔑 Admin';
     toggleAdminColumns(true);
     loadDashboard();
-    showSalaryPanel();
+    showAdminHome();
   } catch (err) {
     showFeedback(adminFeedback, err.message, 'error');
   } finally {
@@ -744,18 +744,23 @@ markPaidBtn.addEventListener('click', async () => {
 });
 
 // ── Panel helpers
+function hideAllAdminPanels() {
+  [adminPanelLogin, adminPanelSalary, adminPanelDetail, adminPanelAdvance,
+   document.getElementById('adminPanelHome'),
+   document.getElementById('adminPanelOfficePayroll'),
+   document.getElementById('adminPanelOfficeDetail'),
+  ].forEach(el => el && el.classList.add('hidden'));
+}
+
 function showLoginPanel() {
+  hideAllAdminPanels();
   adminPanelLogin.classList.remove('hidden');
-  adminPanelSalary.classList.add('hidden');
-  adminPanelDetail.classList.add('hidden');
   hideFeedback(adminFeedback);
 }
 
 function showSalaryPanel() {
-  adminPanelLogin.classList.add('hidden');
+  hideAllAdminPanels();
   adminPanelSalary.classList.remove('hidden');
-  adminPanelDetail.classList.add('hidden');
-  adminPanelAdvance.classList.add('hidden');
   amountGivenInput.value  = '';
   payNotesInput.value      = '';
   payDeductInput.value     = '0';
@@ -768,9 +773,7 @@ function showSalaryPanel() {
 }
 
 function showAdvancePanel(prefillName) {
-  adminPanelLogin.classList.add('hidden');
-  adminPanelSalary.classList.add('hidden');
-  adminPanelDetail.classList.add('hidden');
+  hideAllAdminPanels();
   adminPanelAdvance.classList.remove('hidden');
   if (prefillName) advStaffName.value = prefillName;
   advDate.value = new Date().toISOString().split('T')[0];
@@ -778,10 +781,8 @@ function showAdvancePanel(prefillName) {
 }
 
 function showDetailPanel(name) {
-  adminPanelLogin.classList.add('hidden');
-  adminPanelSalary.classList.add('hidden');
+  hideAllAdminPanels();
   adminPanelDetail.classList.remove('hidden');
-  adminPanelAdvance.classList.add('hidden');
   detailStaffName.textContent = name;
   currentAdvanceRows   = [];
   currentTotalAdvances = 0;
@@ -921,6 +922,183 @@ currentDetailRows    = [];
     salaryDetailTable.innerHTML = '';
   }
 }
+
+// ══════════════════════════════════════════════════════════
+// ADMIN HOME + OFFICE STAFF PAYROLL
+// ══════════════════════════════════════════════════════════
+function showAdminHome() {
+  hideAllAdminPanels();
+  document.getElementById('adminPanelHome').classList.remove('hidden');
+}
+
+function showOfficePayrollPanel() {
+  hideAllAdminPanels();
+  document.getElementById('adminPanelOfficePayroll').classList.remove('hidden');
+  loadOfficePayroll();
+}
+
+function showOfficeDetailPanel(staff) {
+  hideAllAdminPanels();
+  document.getElementById('adminPanelOfficeDetail').classList.remove('hidden');
+  officeCurrentStaff = staff;
+  document.getElementById('officeDetailStaffName').textContent = staff.name;
+  renderOfficeDetail(staff);
+}
+
+// Pay period state
+let officePayYear   = new Date().getFullYear();
+let officePayMonth  = new Date().getMonth() + 1;
+let officePayPeriod = new Date().getDate() <= 15 ? 1 : 2;
+let officeCurrentStaff = null;
+
+function updateOfficePayPeriodUI() {
+  const d        = new Date(officePayYear, officePayMonth - 1, 1);
+  const monthName = d.toLocaleString('en-US', { month: 'long' });
+  const lastDay  = officePayPeriod === 1 ? 15 : new Date(officePayYear, officePayMonth, 0).getDate();
+  const startDay = officePayPeriod === 1 ? '1st' : '16th';
+  document.getElementById('officePayPeriodLabel').textContent =
+    `${monthName} ${startDay} – ${lastDay}, ${officePayYear}`;
+  document.getElementById('switchPayPeriodBtn').textContent =
+    officePayPeriod === 1 ? 'Switch: 16th–end' : 'Switch: 1st–15th';
+}
+
+async function loadOfficePayroll() {
+  updateOfficePayPeriodUI();
+  const list = document.getElementById('officePayrollList');
+  const fb   = document.getElementById('officePayrollFeedback');
+  list.innerHTML = '<p class="empty-msg">Loading…</p>';
+  hideFeedback(fb);
+  try {
+    const data = await gasGet({
+      action: 'getOfficeSalaryReport',
+      year:   officePayYear,
+      month:  officePayMonth,
+      period: officePayPeriod,
+    });
+    if (!data.success) throw new Error(data.message || 'Failed to load');
+    const staff = data.staff || [];
+    if (staff.length === 0) {
+      list.innerHTML = '<p class="empty-msg">No attendance records for this period.</p>';
+      return;
+    }
+    list.innerHTML = staff.map((s, i) => `
+      <div class="staff-balance-card" data-idx="${i}" style="cursor:pointer">
+        <div class="staff-info">
+          <span class="staff-name">${escapeHTML(s.name)}</span>
+          <span class="staff-meta">${escapeHTML(s.position)} · ${s.days} day${s.days !== 1 ? 's' : ''}</span>
+        </div>
+        <span class="staff-total">₱${Number(s.net).toLocaleString()}</span>
+      </div>`).join('');
+    list.querySelectorAll('.staff-balance-card').forEach(card => {
+      const idx = Number(card.dataset.idx);
+      card.addEventListener('click', () => showOfficeDetailPanel(staff[idx]));
+    });
+  } catch (err) {
+    showFeedback(fb, err.message, 'error');
+    list.innerHTML = '';
+  }
+}
+
+function renderOfficeDetail(staff) {
+  hideFeedback(document.getElementById('officeDetailFeedback'));
+  document.getElementById('officePayNotes').value = '';
+  const advances = Array.isArray(staff.advances) ? staff.advances : [];
+  const advSection = advances.length ? `
+    <div class="advance-section">
+      <p class="advance-heading">💸 Cash Advance Deductions</p>
+      <table class="salary-detail-table">
+        <thead><tr><th>Date</th><th>Notes</th><th>Amount</th></tr></thead>
+        <tbody>
+          ${advances.map(a => `
+            <tr>
+              <td>${escapeHTML(String(a.date))}</td>
+              <td>${escapeHTML(String(a.notes || ''))}</td>
+              <td style="color:#e53935">-₱${Number(a.amount).toLocaleString()}</td>
+            </tr>`).join('')}
+          <tr class="total-row">
+            <td colspan="2" style="text-align:right">Total Deductions</td>
+            <td style="color:#e53935">-₱${Number(staff.totalAdvances).toLocaleString()}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>` : '';
+  const rateDisplay = staff.ratePerDay > 0
+    ? `₱${Number(staff.ratePerDay).toLocaleString()}`
+    : `<span style="color:#e53935">No rate — add to <em>office_rates</em> sheet</span>`;
+  document.getElementById('officeDetailContent').innerHTML = `
+    <table class="salary-detail-table" style="width:100%;margin-bottom:.8rem">
+      <thead><tr><th>Position</th><th>Days</th><th>Rate/Day</th><th>Salary</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>${escapeHTML(staff.position)}</td>
+          <td>${staff.days}</td>
+          <td>${rateDisplay}</td>
+          <td>₱${Number(staff.salary).toLocaleString()}</td>
+        </tr>
+      </tbody>
+    </table>
+    ${advSection}
+    <div class="net-total-row">
+      <span class="net-label">Net Payable</span>
+      <span class="net-amount">₱${Number(staff.net).toLocaleString()}</span>
+    </div>`;
+}
+
+// ── Office payroll event listeners
+document.getElementById('adminGoOfficeBtn').addEventListener('click', showOfficePayrollPanel);
+document.getElementById('adminGoOnBoardBtn').addEventListener('click', showSalaryPanel);
+document.getElementById('backToAdminHomeFromSalary').addEventListener('click', showAdminHome);
+document.getElementById('backToAdminHomeFromOffice').addEventListener('click', showAdminHome);
+document.getElementById('backToOfficePayrollBtn').addEventListener('click', showOfficePayrollPanel);
+document.getElementById('closeAdminHomeModal').addEventListener('click', () => closeModal(adminModalOverlay));
+document.getElementById('closeOfficePayrollModal').addEventListener('click', () => closeModal(adminModalOverlay));
+document.getElementById('closeOfficeDetailModal').addEventListener('click', () => closeModal(adminModalOverlay));
+document.getElementById('closeAdvanceModal').addEventListener('click', () => closeModal(adminModalOverlay));
+document.getElementById('switchPayPeriodBtn').addEventListener('click', () => {
+  officePayPeriod = officePayPeriod === 1 ? 2 : 1;
+  loadOfficePayroll();
+});
+document.getElementById('refreshOfficePayrollBtn').addEventListener('click', loadOfficePayroll);
+document.getElementById('adminLogoutBtnHome').addEventListener('click', () => {
+  isAdmin = false;
+  adminBtn.textContent = 'Admin';
+  toggleAdminColumns(false);
+  loadDashboard();
+  closeModal(adminModalOverlay);
+  document.getElementById('adminUser').value = '';
+  document.getElementById('adminPass').value = '';
+});
+document.getElementById('officeMarkPaidBtn').addEventListener('click', async () => {
+  if (!officeCurrentStaff) return;
+  const btn = document.getElementById('officeMarkPaidBtn');
+  btn.disabled = true; btn.textContent = 'Processing…';
+  const notes     = document.getElementById('officePayNotes').value.trim();
+  const d         = new Date(officePayYear, officePayMonth - 1, 1);
+  const mName     = d.toLocaleString('en-US', { month: 'long' });
+  const periodStr = `${mName} ${officePayPeriod === 1 ? '1–15' : '16–end'}, ${officePayYear}`;
+  try {
+    const res = await gasPost({
+      action:            'markOfficePaid',
+      name:              officeCurrentStaff.name,
+      position:          officeCurrentStaff.position,
+      period:            periodStr,
+      days:              officeCurrentStaff.days,
+      ratePerDay:        officeCurrentStaff.ratePerDay,
+      salary:            officeCurrentStaff.salary,
+      deductions:        officeCurrentStaff.totalAdvances,
+      net:               officeCurrentStaff.net,
+      notes,
+      advanceRowIndexes: (officeCurrentStaff.advances || []).map(a => a.rowIndex),
+    });
+    if (!res.success) throw new Error(res.message || 'Failed');
+    showFeedback(document.getElementById('officeDetailFeedback'), '✅ Payment recorded!', 'success');
+    setTimeout(() => showOfficePayrollPanel(), 1400);
+  } catch (err) {
+    showFeedback(document.getElementById('officeDetailFeedback'), err.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = '✓ Mark as Paid';
+  }
+});
 
 // ══════════════════════════════════════════════════════════
 // HELPERS
