@@ -66,6 +66,7 @@ const timeInModalOverlay = document.getElementById('timeInModalOverlay');
 const timeInForm         = document.getElementById('timeInForm');
 const timeInFeedback     = document.getElementById('timeInFeedback');
 const officeBody         = document.getElementById('officeBody');
+let _timeInClock = null; // interval for live clock
 
 document.getElementById('timeInBtn').addEventListener('click', () => {
   // set today's date
@@ -75,37 +76,60 @@ document.getElementById('timeInBtn').addEventListener('click', () => {
   const dd = String(today.getDate()).padStart(2, '0');
   document.getElementById('tiDate').value = `${yy}-${mm}-${dd}`;
 
+  // live clock — update every second
+  const timeInput = document.getElementById('tiTime');
+  function tickClock() {
+    const n = new Date();
+    const hh = String(n.getHours()).padStart(2, '0');
+    const mi = String(n.getMinutes()).padStart(2, '0');
+    const ss = String(n.getSeconds()).padStart(2, '0');
+    timeInput.value = `${hh}:${mi}:${ss}`;
+  }
+  tickClock();
+  clearInterval(_timeInClock);
+  _timeInClock = setInterval(tickClock, 1000);
+
   // auto-fill location via geolocation (always read-only)
   const locInput = document.getElementById('tiLocation');
   locInput.value = '';
   locInput.placeholder = '📍 Getting location…';
 
+  function applyCoords(lat, lon) {
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`;
+    fetch(url, { headers: { 'Accept-Language': 'en' } })
+      .then(r => r.json())
+      .then(geo => {
+        const addr = geo.address || {};
+        const parts = [
+          addr.village || addr.town || addr.city || addr.municipality || addr.county || '',
+          addr.state || '',
+          addr.country || '',
+        ].filter(Boolean);
+        locInput.value = parts.join(', ') || geo.display_name || `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+        locInput.placeholder = '📍 Location detected';
+      })
+      .catch(() => {
+        locInput.value = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+        locInput.placeholder = '📍 Location detected';
+      });
+  }
+
   if (navigator.geolocation) {
+    // First try high-accuracy (GPS), fall back to low-accuracy (WiFi/cell) on timeout/error
     navigator.geolocation.getCurrentPosition(
-      async pos => {
-        try {
-          const { latitude: lat, longitude: lon } = pos.coords;
-          const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`;
-          const res = await fetch(url, { headers: { 'Accept-Language': 'en' } });
-          const geo = await res.json();
-          const addr = geo.address || {};
-          const parts = [
-            addr.village || addr.town || addr.city || addr.municipality || addr.county || '',
-            addr.state || '',
-            addr.country || '',
-          ].filter(Boolean);
-          locInput.value = parts.join(', ') || geo.display_name || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
-          locInput.placeholder = '📍 Location detected';
-        } catch {
-          locInput.value = `${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)}`;
-          locInput.placeholder = '📍 Location detected';
-        }
-      },
+      pos => applyCoords(pos.coords.latitude, pos.coords.longitude),
       () => {
-        locInput.value = '';
-        locInput.placeholder = '⚠️ Location unavailable';
+        // Retry with low accuracy (faster, uses WiFi/cell towers)
+        navigator.geolocation.getCurrentPosition(
+          pos => applyCoords(pos.coords.latitude, pos.coords.longitude),
+          () => {
+            locInput.value = '';
+            locInput.placeholder = '⚠️ Location unavailable — check browser permissions';
+          },
+          { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 }
+        );
       },
-      { timeout: 8000 }
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
   } else {
     locInput.placeholder = '⚠️ Geolocation not supported';
@@ -115,9 +139,11 @@ document.getElementById('timeInBtn').addEventListener('click', () => {
   openModal(timeInModalOverlay);
 });
 
-document.getElementById('closeTimeInModal').addEventListener('click', () => closeModal(timeInModalOverlay));
-document.getElementById('cancelTimeInBtn').addEventListener('click', () => closeModal(timeInModalOverlay));
-timeInModalOverlay.addEventListener('click', e => { if (e.target === timeInModalOverlay) closeModal(timeInModalOverlay); });
+function _stopTimeInClock() { clearInterval(_timeInClock); _timeInClock = null; }
+
+document.getElementById('closeTimeInModal').addEventListener('click', () => { _stopTimeInClock(); closeModal(timeInModalOverlay); });
+document.getElementById('cancelTimeInBtn').addEventListener('click', () => { _stopTimeInClock(); closeModal(timeInModalOverlay); });
+timeInModalOverlay.addEventListener('click', e => { if (e.target === timeInModalOverlay) { _stopTimeInClock(); closeModal(timeInModalOverlay); } });
 
 timeInForm.addEventListener('submit', async e => {
   e.preventDefault();
@@ -139,9 +165,12 @@ timeInForm.addEventListener('submit', async e => {
   const btn = document.getElementById('timeInSubmitBtn');
   btn.disabled = true; btn.textContent = 'Saving…';
 
-  // Get current time HH:MM
-  const now  = new Date();
-  const time = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+  // Snapshot the displayed time at the moment of submit
+  const time = document.getElementById('tiTime').value || (() => {
+    const n = new Date();
+    return `${String(n.getHours()).padStart(2,'0')}:${String(n.getMinutes()).padStart(2,'0')}:${String(n.getSeconds()).padStart(2,'0')}`;
+  })();
+  _stopTimeInClock();
 
   try {
     const data = await gasPost({ action: 'officeTimeIn', name, position, date, time, location });
