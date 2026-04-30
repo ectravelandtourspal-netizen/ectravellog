@@ -75,11 +75,10 @@ document.getElementById('timeInBtn').addEventListener('click', () => {
   const dd = String(today.getDate()).padStart(2, '0');
   document.getElementById('tiDate').value = `${yy}-${mm}-${dd}`;
 
-  // auto-fill location via geolocation
+  // auto-fill location via geolocation (always read-only)
   const locInput = document.getElementById('tiLocation');
   locInput.value = '';
   locInput.placeholder = '📍 Getting location…';
-  locInput.readOnly = true;
 
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
@@ -90,50 +89,35 @@ document.getElementById('timeInBtn').addEventListener('click', () => {
           const res = await fetch(url, { headers: { 'Accept-Language': 'en' } });
           const geo = await res.json();
           const addr = geo.address || {};
-          // Build a short readable location string
           const parts = [
             addr.village || addr.town || addr.city || addr.municipality || addr.county || '',
             addr.state || '',
             addr.country || '',
           ].filter(Boolean);
           locInput.value = parts.join(', ') || geo.display_name || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+          locInput.placeholder = '📍 Location detected';
         } catch {
           locInput.value = `${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)}`;
+          locInput.placeholder = '📍 Location detected';
         }
-        locInput.readOnly = false;
-        locInput.placeholder = 'Location';
       },
       () => {
-        // permission denied or unavailable — let user type manually
-        locInput.readOnly = false;
         locInput.value = '';
-        locInput.placeholder = 'e.g. Main Office';
+        locInput.placeholder = '⚠️ Location unavailable';
       },
       { timeout: 8000 }
     );
   } else {
-    locInput.readOnly = false;
-    locInput.placeholder = 'e.g. Main Office';
+    locInput.placeholder = '⚠️ Geolocation not supported';
   }
 
   hideFeedback(timeInFeedback);
   openModal(timeInModalOverlay);
 });
 
-document.getElementById('closeTimeInModal').addEventListener('click', () => {
-  document.getElementById('tiLocation').readOnly = false;
-  closeModal(timeInModalOverlay);
-});
-document.getElementById('cancelTimeInBtn').addEventListener('click', () => {
-  document.getElementById('tiLocation').readOnly = false;
-  closeModal(timeInModalOverlay);
-});
-timeInModalOverlay.addEventListener('click', e => {
-  if (e.target === timeInModalOverlay) {
-    document.getElementById('tiLocation').readOnly = false;
-    closeModal(timeInModalOverlay);
-  }
-});
+document.getElementById('closeTimeInModal').addEventListener('click', () => closeModal(timeInModalOverlay));
+document.getElementById('cancelTimeInBtn').addEventListener('click', () => closeModal(timeInModalOverlay));
+timeInModalOverlay.addEventListener('click', e => { if (e.target === timeInModalOverlay) closeModal(timeInModalOverlay); });
 
 timeInForm.addEventListener('submit', async e => {
   e.preventDefault();
@@ -143,8 +127,12 @@ timeInForm.addEventListener('submit', async e => {
   const date     = document.getElementById('tiDate').value;
   const location = document.getElementById('tiLocation').value.trim();
 
-  if (!name || !position || !location) {
+  if (!name || !position) {
     showFeedback(timeInFeedback, 'Please fill in all required fields.', 'error');
+    return;
+  }
+  if (!location) {
+    showFeedback(timeInFeedback, '⚠️ Location not yet detected. Please wait or allow location access.', 'error');
     return;
   }
 
