@@ -641,13 +641,24 @@ function getOfficeAttendance(date) {
       date:     rowDate,
       name:     String(row[1]).trim(),
       position: String(row[2]).trim(),
-      time:     row[3] instanceof Date
-                  ? Utilities.formatDate(row[3], tz, 'HH:mm:ss')
-                  : String(row[3]).trim(),
+      time:     formatTime12h(row[3], tz),
       location: String(row[4]).trim(),
     });
   });
   return jsonResponse({ success: true, records: records });
+}
+
+// ── Convert HH:mm:ss or Date to 12-hour AM/PM string
+function formatTime12h(val, tz) {
+  if (val instanceof Date) return Utilities.formatDate(val, tz, 'hh:mm:ss a');
+  var s = String(val).trim();
+  if (!s) return s;
+  var parts = s.split(':');
+  var h = parseInt(parts[0], 10);
+  if (isNaN(h)) return s;
+  var ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return String(h).padStart(2, '0') + ':' + (parts[1] || '00') + ':' + (parts[2] || '00') + ' ' + ampm;
 }
 
 // ══════════════════════════════════════════════════════════// getOfficeRates — reads "office_rates" sheet (A=Name, B=Daily Rate)
