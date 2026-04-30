@@ -591,9 +591,10 @@ function officeTimeIn(params) {
   }
   // Data starts at row 3 (row 2 left as a visual spacer)
   var newRow = Math.max(sheet.getLastRow() + 1, 3);
-  // Force date cell to plain-text format so Sheets never auto-converts the
-  // '2026-05-01' string into a Date serial — avoids timezone-shift mismatches
-  sheet.getRange(newRow, 1).setNumberFormat('@');
+  // Force date and time cells to plain-text so Sheets never auto-converts
+  // '2026-05-01' or '01:19:48' into date/time serials
+  sheet.getRange(newRow, 1).setNumberFormat('@'); // Date column
+  sheet.getRange(newRow, 4).setNumberFormat('@'); // Time In column
   sheet.getRange(newRow, 1, 1, 5).setValues([[
     params.date     || '',
     params.name     || '',
@@ -640,7 +641,9 @@ function getOfficeAttendance(date) {
       date:     rowDate,
       name:     String(row[1]).trim(),
       position: String(row[2]).trim(),
-      time:     String(row[3]).trim(),
+      time:     row[3] instanceof Date
+                  ? Utilities.formatDate(row[3], tz, 'HH:mm:ss')
+                  : String(row[3]).trim(),
       location: String(row[4]).trim(),
     });
   });
