@@ -704,6 +704,7 @@ function getOfficeSalaryReport(params) {
         rowDate = String(stored).trim().substring(0, 10);
       }
       if (!dateSet[rowDate]) return; // outside pay period
+      var name     = String(row[1]).trim();
       var position = String(row[2]).trim();
       if (!name) return;
       var nameKey = name.toLowerCase();
