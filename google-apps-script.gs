@@ -589,13 +589,18 @@ function officeTimeIn(params) {
       .setFontColor('#ffffff');
     sheet.setFrozenRows(1);
   }
-  sheet.appendRow([
+  // Data starts at row 3 (row 2 left as a visual spacer)
+  var newRow = Math.max(sheet.getLastRow() + 1, 3);
+  // Force date cell to plain-text format so Sheets never auto-converts the
+  // '2026-05-01' string into a Date serial — avoids timezone-shift mismatches
+  sheet.getRange(newRow, 1).setNumberFormat('@');
+  sheet.getRange(newRow, 1, 1, 5).setValues([[
     params.date     || '',
     params.name     || '',
     params.position || '',
     params.time     || '',
     params.location || '',
-  ]);
+  ]]);
   SpreadsheetApp.flush();
   return jsonResponse({ success: true, message: 'Time in recorded' });
 }
@@ -610,14 +615,27 @@ function getOfficeAttendance(date) {
   if (!sheet || sheet.getLastRow() < 2) {
     return jsonResponse({ success: true, records: [] });
   }
-  var tz   = Session.getScriptTimeZone();
-  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 5).getValues();
+  var tz          = Session.getScriptTimeZone();
+  var targetDate  = String(date).trim();
+  // Read from row 2 for backward-compat (pre-fix data may sit at row 2)
+  var numRows = sheet.getLastRow() - 1;
+  var data    = sheet.getRange(2, 1, numRows, 5).getValues();
   var records = [];
   data.forEach(function(row) {
-    var rowDate = row[0] instanceof Date
-      ? Utilities.formatDate(row[0], tz, 'yyyy-MM-dd')
-      : String(row[0]).trim();
-    if (rowDate !== String(date).trim()) return;
+    var stored = row[0];
+    if (!stored && stored !== 0) return; // skip blank rows
+    var rowDate;
+    if (stored instanceof Date) {
+      // Date object: compare in script TZ; also try UTC as fallback for
+      // misconfigured script timezones
+      var inTz  = Utilities.formatDate(stored, tz,    'yyyy-MM-dd');
+      var inUtc = Utilities.formatDate(stored, 'UTC', 'yyyy-MM-dd');
+      rowDate = (inTz === targetDate || inUtc === targetDate) ? targetDate : inTz;
+    } else {
+      // Plain text (new records stored with @-format)
+      rowDate = String(stored).trim().substring(0, 10);
+    }
+    if (rowDate !== targetDate) return;
     records.push({
       date:     rowDate,
       name:     String(row[1]).trim(),
@@ -672,13 +690,20 @@ function getOfficeSalaryReport(params) {
   var staffMap = {};
 
   if (sheet && sheet.getLastRow() >= 2) {
-    var attData = sheet.getRange(2, 1, sheet.getLastRow() - 1, 5).getValues();
+    var numAttRows = sheet.getLastRow() - 1;
+    var attData = sheet.getRange(2, 1, numAttRows, 5).getValues();
     attData.forEach(function(row) {
-      var rowDate = row[0] instanceof Date
-        ? Utilities.formatDate(row[0], tz, 'yyyy-MM-dd')
-        : String(row[0]).trim();
-      if (!dateSet[rowDate]) return;
-      var name     = String(row[1]).trim();
+      var stored  = row[0];
+      if (!stored && stored !== 0) return;
+      var rowDate;
+      if (stored instanceof Date) {
+        var inTz  = Utilities.formatDate(stored, tz,    'yyyy-MM-dd');
+        var inUtc = Utilities.formatDate(stored, 'UTC', 'yyyy-MM-dd');
+        rowDate = dateSet[inTz] ? inTz : inUtc;
+      } else {
+        rowDate = String(stored).trim().substring(0, 10);
+      }
+      if (!dateSet[rowDate]) return; // outside pay period
       var position = String(row[2]).trim();
       if (!name) return;
       var nameKey = name.toLowerCase();
