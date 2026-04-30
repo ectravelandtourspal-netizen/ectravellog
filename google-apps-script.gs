@@ -61,6 +61,7 @@ function doPost(e) {
     if (params.action === 'markPaid')        return markPaid(params);
     if (params.action === 'adminLogin')      return adminLogin(params);
     if (params.action === 'addCashAdvance')  return addCashAdvance(params);
+    if (params.action === 'officeTimeIn')    return officeTimeIn(params);
     return jsonResponse({ success: false, message: 'Unknown action' });
   } catch (err) {
     return jsonResponse({ success: false, message: err.message });
@@ -80,14 +81,16 @@ function doGet(e) {
       if (params.action === 'markPaid')       return markPaid(params);
       if (params.action === 'adminLogin')     return adminLogin(params);
       if (params.action === 'addCashAdvance') return addCashAdvance(params);
+      if (params.action === 'officeTimeIn')   return officeTimeIn(params);
     }
     var action = e.parameter.action;
-    if (action === 'getTrips')         return getTrips();
-    if (action === 'getStaffBalances') return getStaffBalances();
-    if (action === 'getStaffDetail')   return getStaffDetail(e.parameter.name);
-    if (action === 'getRates')         return getRates();
-    if (action === 'getCashAdvances')  return getCashAdvances(e.parameter.name);
-    if (action === 'getStaffNames')    return getStaffNames();
+    if (action === 'getTrips')              return getTrips();
+    if (action === 'getStaffBalances')      return getStaffBalances();
+    if (action === 'getStaffDetail')        return getStaffDetail(e.parameter.name);
+    if (action === 'getRates')              return getRates();
+    if (action === 'getCashAdvances')       return getCashAdvances(e.parameter.name);
+    if (action === 'getStaffNames')         return getStaffNames();
+    if (action === 'getOfficeAttendance')   return getOfficeAttendance(e.parameter.date);
     return jsonResponse({ success: false, message: 'Unknown action' });
   } catch (err) {
     return jsonResponse({ success: false, message: err.message });
@@ -563,6 +566,64 @@ function jsonResponse(data) {
   var output = ContentService.createTextOutput(JSON.stringify(data));
   output.setMimeType(ContentService.MimeType.JSON);
   return output;
+}
+
+// ══════════════════════════════════════════════════════════
+// officeTimeIn — writes one row to "office staff" sheet
+// Columns: Date | Name | Position | Time In | Location
+// ══════════════════════════════════════════════════════════
+function officeTimeIn(params) {
+  var ss    = SpreadsheetApp.openById(SHEET_ID);
+  var sheet = ss.getSheetByName('office staff');
+  if (!sheet) {
+    sheet = ss.insertSheet('office staff');
+    sheet.getRange(1, 1, 1, 5).setValues([[
+      'Date', 'Name', 'Position', 'Time In', 'Location'
+    ]]);
+    sheet.getRange(1, 1, 1, 5)
+      .setFontWeight('bold')
+      .setBackground('#1a73e8')
+      .setFontColor('#ffffff');
+    sheet.setFrozenRows(1);
+  }
+  sheet.appendRow([
+    params.date     || '',
+    params.name     || '',
+    params.position || '',
+    params.time     || '',
+    params.location || '',
+  ]);
+  SpreadsheetApp.flush();
+  return jsonResponse({ success: true, message: 'Time in recorded' });
+}
+
+// ══════════════════════════════════════════════════════════
+// getOfficeAttendance — returns all rows from "office staff"
+// sheet where Date matches the requested date (yyyy-MM-dd)
+// ══════════════════════════════════════════════════════════
+function getOfficeAttendance(date) {
+  var ss    = SpreadsheetApp.openById(SHEET_ID);
+  var sheet = ss.getSheetByName('office staff');
+  if (!sheet || sheet.getLastRow() < 2) {
+    return jsonResponse({ success: true, records: [] });
+  }
+  var tz   = Session.getScriptTimeZone();
+  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 5).getValues();
+  var records = [];
+  data.forEach(function(row) {
+    var rowDate = row[0] instanceof Date
+      ? Utilities.formatDate(row[0], tz, 'yyyy-MM-dd')
+      : String(row[0]).trim();
+    if (rowDate !== String(date).trim()) return;
+    records.push({
+      date:     rowDate,
+      name:     String(row[1]).trim(),
+      position: String(row[2]).trim(),
+      time:     String(row[3]).trim(),
+      location: String(row[4]).trim(),
+    });
+  });
+  return jsonResponse({ success: true, records: records });
 }
 
 // ══════════════════════════════════════════════════════════

@@ -1,6 +1,6 @@
 /* ════════════════════════════════════════════════════════
-   Trip Monitoring System — script.js
-   All frontend logic: dashboard, form, admin, uploads
+   EC Travel LOG — script.js
+   All frontend logic: landing, office staff, trips, admin
 ════════════════════════════════════════════════════════ */
 
 // ── Google Apps Script Web App URL (public endpoint)
@@ -15,14 +15,9 @@ async function gasGet(params) {
 }
 
 async function gasPost(payload) {
-  // GAS redirects POST → GET (302), so we send payload as a query param
-  // which survives the redirect and is read via e.parameter.payload in doPost/doGet
   const url = new URL(GAS_URL);
   url.searchParams.set('payload', JSON.stringify(payload));
-  const res = await fetch(url.toString(), {
-    method:   'POST',
-    redirect: 'follow',
-  });
+  const res = await fetch(url.toString(), { method: 'POST', redirect: 'follow' });
   return res.json();
 }
 
@@ -32,7 +27,124 @@ async function gasPost(payload) {
 let isAdmin = false;
 
 // ══════════════════════════════════════════════════════════
-// DOM REFS
+// DOM REFS — Landing
+// ══════════════════════════════════════════════════════════
+const landingPage      = document.getElementById('landingPage');
+const officeSection    = document.getElementById('officeSection');
+const onBoardSection   = document.getElementById('onBoardSection');
+
+// ══════════════════════════════════════════════════════════
+// LANDING NAVIGATION
+// ══════════════════════════════════════════════════════════
+document.getElementById('officeStaffBtn').addEventListener('click', () => {
+  landingPage.classList.add('hidden');
+  officeSection.classList.remove('hidden');
+  loadOfficeDashboard();
+});
+
+document.getElementById('onBoardStaffBtn').addEventListener('click', () => {
+  landingPage.classList.add('hidden');
+  onBoardSection.classList.remove('hidden');
+  loadDashboard();
+  loadStaffNamesDatalist();
+});
+
+document.getElementById('officeBackBtn').addEventListener('click', () => {
+  officeSection.classList.add('hidden');
+  landingPage.classList.remove('hidden');
+});
+
+document.getElementById('onBoardBackBtn').addEventListener('click', () => {
+  onBoardSection.classList.add('hidden');
+  landingPage.classList.remove('hidden');
+});
+
+// ══════════════════════════════════════════════════════════
+// OFFICE STAFF — Time In
+// ══════════════════════════════════════════════════════════
+const timeInModalOverlay = document.getElementById('timeInModalOverlay');
+const timeInForm         = document.getElementById('timeInForm');
+const timeInFeedback     = document.getElementById('timeInFeedback');
+const officeBody         = document.getElementById('officeBody');
+
+document.getElementById('timeInBtn').addEventListener('click', () => {
+  // set today's date
+  const today = new Date();
+  const yy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, '0');
+  const dd = String(today.getDate()).padStart(2, '0');
+  document.getElementById('tiDate').value = `${yy}-${mm}-${dd}`;
+  hideFeedback(timeInFeedback);
+  openModal(timeInModalOverlay);
+});
+
+document.getElementById('closeTimeInModal').addEventListener('click', () => closeModal(timeInModalOverlay));
+document.getElementById('cancelTimeInBtn').addEventListener('click', () => closeModal(timeInModalOverlay));
+timeInModalOverlay.addEventListener('click', e => { if (e.target === timeInModalOverlay) closeModal(timeInModalOverlay); });
+
+timeInForm.addEventListener('submit', async e => {
+  e.preventDefault();
+  hideFeedback(timeInFeedback);
+  const name     = document.getElementById('tiStaffName').value.trim();
+  const position = document.getElementById('tiPosition').value.trim();
+  const date     = document.getElementById('tiDate').value;
+  const location = document.getElementById('tiLocation').value.trim();
+
+  if (!name || !position || !location) {
+    showFeedback(timeInFeedback, 'Please fill in all required fields.', 'error');
+    return;
+  }
+
+  const btn = document.getElementById('timeInSubmitBtn');
+  btn.disabled = true; btn.textContent = 'Saving…';
+
+  // Get current time HH:MM
+  const now  = new Date();
+  const time = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+
+  try {
+    const data = await gasPost({ action: 'officeTimeIn', name, position, date, time, location });
+    if (!data.success) throw new Error(data.message || 'Failed to save');
+    showFeedback(timeInFeedback, '✅ Time in recorded!', 'success');
+    timeInForm.reset();
+    await loadOfficeDashboard();
+    setTimeout(() => closeModal(timeInModalOverlay), 1200);
+  } catch (err) {
+    showFeedback(timeInFeedback, `❌ ${err.message}`, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Time In';
+  }
+});
+
+async function loadOfficeDashboard() {
+  officeBody.innerHTML = '<tr><td colspan="5" class="empty-msg">Loading…</td></tr>';
+  try {
+    const today = (() => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    })();
+    const data = await gasGet({ action: 'getOfficeAttendance', date: today });
+    if (!data.success) throw new Error(data.message || 'Failed to load');
+    const rows = data.records || [];
+    if (rows.length === 0) {
+      officeBody.innerHTML = '<tr><td colspan="5" class="empty-msg">No time-ins recorded today.</td></tr>';
+      return;
+    }
+    officeBody.innerHTML = rows.map(r => `
+      <tr>
+        <td>${escapeHTML(r.name)}</td>
+        <td>${escapeHTML(r.position)}</td>
+        <td>${escapeHTML(r.time)}</td>
+        <td>${escapeHTML(r.location)}</td>
+        <td>${escapeHTML(r.date)}</td>
+      </tr>`).join('');
+  } catch (err) {
+    officeBody.innerHTML = `<tr><td colspan="5" class="empty-msg">⚠️ ${err.message}</td></tr>`;
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// DOM REFS — Trips & Admin
 // ══════════════════════════════════════════════════════════
 const newTripBtn        = document.getElementById('newTripBtn');
 const tripModalOverlay  = document.getElementById('tripModalOverlay');
@@ -66,10 +178,10 @@ const markPaidBtn       = document.getElementById('markPaidBtn');
 const amountGivenInput  = document.getElementById('amountGivenInput');
 const payNotesInput     = document.getElementById('payNotesInput');
 const payDeductInput    = document.getElementById('payDeductInput');
-let currentDetailRows   = []; // rowIndexes of displayed unpaid records
-let currentStaffName    = '';  // name shown in detail panel
-let currentGrandTotal   = 0;   // computed grand total for current detail
-let currentTotalAdvances = 0;  // sum of pre-recorded cash advances from sheet
+let currentDetailRows   = [];
+let currentStaffName    = '';
+let currentGrandTotal   = 0;
+let currentTotalAdvances = 0;
 
 const tripsBody         = document.getElementById('tripsBody');
 const adminOnlyCols     = document.querySelectorAll('.admin-only');
@@ -88,9 +200,7 @@ let currentAdvanceRows  = []; // rowIndexes of outstanding advances shown in det
 // ══════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
   buildDefaultStaffRows();
-  loadDashboard();
   wireEndDate();
-  loadStaffNamesDatalist();
 });
 
 // ══════════════════════════════════════════════════════════
